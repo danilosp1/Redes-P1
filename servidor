@@ -4,7 +4,6 @@ from tcp import Servidor
 import re
 import base64
 
-
 def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
@@ -15,6 +14,9 @@ def sair(conexao):
 
 package = [b'']
 users = {}
+channels = {}
+connections = {}
+userChannels = {}
 
 def dados_recebidos(conexao, dados):
     global package
@@ -55,7 +57,9 @@ def dados_recebidos(conexao, dados):
                         conexao.enviar(b':server 001 %s :Welcome\r\n' % novoNick)
                         conexao.enviar(b':server 422 %s :MOTD File is missing\r\n' % novoNick)
                     else:
+                        del connections[str(antigoNick).lower()]
                         conexao.enviar(b':%s NICK %s\r\n' % (antigoNick, novoNick))
+                    connections[str(novoNick).lower()] = conexao
                 else:
                     conexao.enviar(b':server 433 %s %s :Nickname is already in use\r\n' % (antigoNick, novoNick))
             else:
@@ -63,8 +67,54 @@ def dados_recebidos(conexao, dados):
         
         # Mensagem privada PRIVMSG
         if b'privmsg' in package[i].lower():
-            print("não sei")
+            origem = users[str(conexao)]
+            destino = package[i].split(b' ')[1]
+            conteudo = package[i].split(b' ')[-1]
 
+            if str(destino)[2] == '#':
+                for key in channels.keys():
+                    if(destino.lower() == key.lower()):
+                        destino = key
+                    break
+                if(origem.lower() in [value.lower() for value in channels[destino]]):
+                    resposta = b':%s PRIVMSG %s %s\r\n' % (origem, destino, conteudo)
+                    for user in channels[destino]:
+                        if(user.lower() != origem.lower()):
+                            connections[str(user).lower()].enviar(resposta)
+                
+            else:
+                if(str(destino).lower() in connections.keys()):
+                    resposta = b':%s PRIVMSG %s %s\r\n' % (origem, destino, conteudo)
+                    connections[str(destino).lower()].enviar(resposta)
+
+
+        
+        if b'join' in package[i].lower():
+            channel = package[i].split(b' ')[-1]
+            if(str(channel)[2] == '#' and validar_nome(channel[1:])):
+                if(channel.lower() not in [value.lower() for value in channels.keys()]):
+                    channels[channel] = []
+                channels[channel].append(users[str(conexao)])
+                conexao.enviar(b':%s JOIN :%s\r\n' % (users[str(conexao)], channel))
+                if(users[str(conexao)] not in userChannels.keys()):
+                    userChannels[users[str(conexao)]] = []
+                userChannels[users[str(conexao)]].append(channel)
+            else:
+                conexao.enviar(b':server 403 %s :No such channel\r\n' % (channel))
+        
+        if b'part' in package[i].lower():
+            user = users[str(conexao)]
+            channel = package[i].split(b' ')[1]
+            for key in channels.keys():
+                if(channel.lower() == key.lower()):
+                    channel = key
+                break
+            if(user.lower() in [value.lower() for value in channels[channel]]):
+                resposta = b':%s PART %s\r\n' % (user, channel)
+                for con in channels[channel]:
+                    connections[str(con).lower()].enviar(resposta)
+                channels[channel].remove(user)
+        
         if package[i] != b'': print(conexao, package[i])
         
 
