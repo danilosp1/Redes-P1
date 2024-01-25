@@ -1,26 +1,48 @@
 #!/usr/bin/env python3
 import asyncio
 from tcp import Servidor
+from collections import defaultdict
 import re
 import base64
+
+package = [b'']
+users = {} # armazena conexão: user
+channels = {} # armazena canais: [users_name]
+connections = {} # armazena user: conexão
+userChannels = {} # armazena user: [canais]
 
 def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
-
 def sair(conexao):
+    global users
+    global connections
+    global userChannels
+    
+    try:
+        check = defaultdict(lambda : False)
+        for channel in userChannels[users[str(conexao)]]:
+            channels[channel].remove(users[str(conexao)])
+            for user in channels[channel]:
+                if not check[user.lower()]:
+                    connections[str(user).lower()].enviar(b':%s QUIT :Connection closed\r\n' % (users[str(conexao)]))
+                    check[str(user).lower()] = True
+        
+        del userChannels[users[str(conexao)]]
+        del connections[str(users[str(conexao)]).lower()]
+        del users[str(conexao)]
+    except:
+        pass
+                
+    
     print(conexao, 'conexão fechada')
     conexao.fechar()
-
-package = [b'']
-users = {}
-channels = {}
-connections = {}
-userChannels = {}
 
 def dados_recebidos(conexao, dados):
     global package
     global users
+    global connections
+    global userChannels
 
     # Verificar se o pacote é válido
     if dados == b'':
@@ -86,19 +108,40 @@ def dados_recebidos(conexao, dados):
                 if(str(destino).lower() in connections.keys()):
                     resposta = b':%s PRIVMSG %s %s\r\n' % (origem, destino, conteudo)
                     connections[str(destino).lower()].enviar(resposta)
-
-
         
         if b'join' in package[i].lower():
             channel = package[i].split(b' ')[-1]
+            
             if(str(channel)[2] == '#' and validar_nome(channel[1:])):
                 if(channel.lower() not in [value.lower() for value in channels.keys()]):
                     channels[channel] = []
+                    
                 channels[channel].append(users[str(conexao)])
-                conexao.enviar(b':%s JOIN :%s\r\n' % (users[str(conexao)], channel))
+                
+                resposta = b':%s JOIN :%s\r\n' % (users[str(conexao)], channel)
+                
                 if(users[str(conexao)] not in userChannels.keys()):
                     userChannels[users[str(conexao)]] = []
                 userChannels[users[str(conexao)]].append(channel)
+
+                for user in channels[channel]:
+                    connections[str(user).lower()].enviar(resposta)
+
+                participants = channels[channel]
+                participants.sort()
+                base = b':server 353 %s = %s :' % (users[str(conexao)], channel)
+                resposta = base
+                
+                for participant in participants: 
+                    if len(resposta) + len(participant) < 510:
+                        resposta = resposta + participant + b' '
+                    else:
+                        conexao.enviar(resposta + b'\r\n')
+                        resposta = base + participant + b' '
+                
+                if(resposta != base): conexao.enviar(resposta + b'\r\n')
+                
+                conexao.enviar(b':server 366 %s %s :End of /NAMES list.\r\n' % (users[str(conexao)], channel))   
             else:
                 conexao.enviar(b':server 403 %s :No such channel\r\n' % (channel))
         
